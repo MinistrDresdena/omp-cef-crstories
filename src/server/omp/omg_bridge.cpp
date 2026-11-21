@@ -47,6 +47,10 @@ void OmpPlatformBridge::CallPawnPublic(const std::string& name, const std::vecto
         if (script->FindPublic(name.c_str(), &idx) != AMX_ERR_NONE)
             return;
 
+        // strings pushed below live on the AMX heap; remember the first one to free them after Exec
+        cell heap_addr_before_push = 0;
+        bool string_pushed = false;
+
         for (auto it = args.rbegin(); it != args.rend(); ++it)
         {
             const auto& arg = *it;
@@ -55,7 +59,13 @@ void OmpPlatformBridge::CallPawnPublic(const std::string& name, const std::vecto
                 case ArgumentType::String:
                 {
                     std::string ansi_string = Utf8ToAnsi(arg.stringValue);
-                    script->PushString(nullptr, nullptr, ansi_string, false, false);
+                    cell amx_addr = 0;
+                    script->PushString(&amx_addr, nullptr, ansi_string, false, false);
+                    if (!string_pushed)
+                    {
+                        heap_addr_before_push = amx_addr;
+                        string_pushed = true;
+                    }
                     break;
                 }
                 case ArgumentType::Integer:
@@ -72,6 +82,10 @@ void OmpPlatformBridge::CallPawnPublic(const std::string& name, const std::vecto
 
         cell retval;
         script->Exec(&retval, idx);
+
+        // free the pushed strings (before: every CEF event leaked its strings on the AMX heap)
+        if (string_pushed)
+            script->Release(heap_addr_before_push);
     };
 
     call_on_script(pawn_->mainScript());
